@@ -8,7 +8,7 @@ use std::{fmt, mem, slice};
 
 use windows_sys::Win32::Foundation::{
     ERROR_BROKEN_PIPE, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
-    ERROR_PIPE_LISTENING, HANDLE, INVALID_HANDLE_VALUE,
+    ERROR_PIPE_LISTENING, HANDLE, INVALID_HANDLE_VALUE, ERROR_MORE_DATA,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
@@ -727,6 +727,12 @@ impl Inner {
             // If ERROR_PIPE_LISTENING happens then it's not a real read error,
             // we just need to wait for a connect.
             Err(ref e) if e.raw_os_error() == Some(ERROR_PIPE_LISTENING as i32) => false,
+
+            Err(ref e) if e.raw_os_error() == Some(ERROR_MORE_DATA as i32) => {
+                io.read = State::Pending(buf, 0);
+                mem::forget(me.clone());
+                true
+            }
 
             // If some other error happened, though, we're now readable to give
             // out the error.
