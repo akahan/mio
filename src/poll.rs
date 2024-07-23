@@ -3,8 +3,10 @@
     not(mio_unsupported_force_poll_poll),
     not(any(
         target_os = "espidf",
+        target_os = "fuchsia",
         target_os = "haiku",
         target_os = "hermit",
+        target_os = "hurd",
         target_os = "nto",
         target_os = "solaris",
         target_os = "vita"
@@ -439,8 +441,10 @@ impl Poll {
     not(mio_unsupported_force_poll_poll),
     not(any(
         target_os = "espidf",
+        target_os = "fuchsia",
         target_os = "haiku",
         target_os = "hermit",
+        target_os = "hurd",
         target_os = "nto",
         target_os = "solaris",
         target_os = "vita"
@@ -738,7 +742,9 @@ impl fmt::Debug for Registry {
     not(any(
         target_os = "espidf",
         target_os = "haiku",
+        target_os = "fuchsia",
         target_os = "hermit",
+        target_os = "hurd",
         target_os = "nto",
         target_os = "solaris",
         target_os = "vita"
@@ -757,6 +763,7 @@ cfg_os_poll! {
         not(any(
             target_os = "espidf",
             target_os = "hermit",
+            target_os = "hurd",
             target_os = "nto",
             target_os = "solaris",
             target_os = "vita"
