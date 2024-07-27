@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::{fmt, mem, slice};
-
+use log::debug;
 use windows_sys::Win32::Foundation::{
     ERROR_BROKEN_PIPE, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
     ERROR_PIPE_LISTENING, HANDLE, INVALID_HANDLE_VALUE,
@@ -868,6 +868,11 @@ fn read_done(status: &OVERLAPPED_ENTRY, events: Option<&mut Vec<Event>>) {
     let mut io = me.io.lock().unwrap();
     let mut buf = match mem::replace(&mut io.read, State::None) {
         State::Pending(buf, _) => buf,
+        State::Err(e) => {
+            error!("read_done; error={e}");
+            io.read = State::Err(e);
+            return;
+        }
         _ => unreachable!(),
     };
     unsafe {
@@ -907,6 +912,11 @@ fn write_done(status: &OVERLAPPED_ENTRY, events: Option<&mut Vec<Event>>) {
             return;
         }
         State::Pending(buf, pos) => (buf, pos),
+        State::Err(e) => {
+            error!("write_done; error={e}");
+            io.write = State::Err(e);
+            return;
+        }
         _ => unreachable!(),
     };
 
