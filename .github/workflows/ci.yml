@@ -8,6 +8,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
   CI: true
+  WASMTIME_VERSION: 47.0.0
+  # Pin a specific miri version
+  rust_miri_nightly: nightly-2026-07-20
 
 permissions:
   contents: read #  to fetch code (actions/checkout)
@@ -21,10 +24,9 @@ jobs:
       matrix:
         os: ["ubuntu-latest", "macos-latest", "windows-latest"]
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
-    - name: Install Cargo-hack
-      run: cargo install --debug cargo-hack
+    - uses: taiki-e/install-action@cargo-hack
     - name: Check all features
       run: cargo hack check --feature-powerset
     - name: Tests
@@ -37,7 +39,7 @@ jobs:
     env:
       RUSTFLAGS: "--cfg mio_unsupported_force_poll_poll"
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - name: Tests
       run: cargo test --all-features
@@ -49,7 +51,7 @@ jobs:
     env:
       RUSTFLAGS: "--cfg mio_unsupported_force_waker_pipe"
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - name: Tests
       run: cargo test --all-features
@@ -63,7 +65,7 @@ jobs:
       matrix:
         os: ["ubuntu-latest", "macos-latest", "windows-latest"]
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@nightly
     - name: Install minimal verions
       run: cargo update -Zminimal-versions
@@ -77,20 +79,33 @@ jobs:
       matrix:
         os: ["ubuntu-latest", "macos-latest", "windows-latest"]
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@master
       with:
-        # NOTE: full version (including .0) to work around
-        # <https://github.com/dtolnay/rust-toolchain/issues/112>.
-        toolchain: 1.70.0
+        toolchain: "1.71"
     - name: Check
       # We only run check allowing us to use newer features in tests.
       run: cargo check --all-features
+  TestWASI:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Setup `wasmtime`
+      run: |
+        curl -OL https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz
+        tar xf wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz
+        echo CARGO_TARGET_WASM32_WASIP2_RUNNER="$(pwd)/wasmtime-v${WASMTIME_VERSION}-x86_64-linux/wasmtime run -Sinherit-network" >> $GITHUB_ENV
+    - name: Install target
+      run: rustup target add wasm32-wasip2
+    - name: Tests
+      run: cargo test --target wasm32-wasip2 --all-features
   Nightly:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@nightly
     - name: Tests
       run: cargo test --all-features
@@ -98,17 +113,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
     - name: Clippy
-      run: cargo clippy --all-targets --all-features -- --allow clippy::mixed-attributes-style --allow clippy::unused-io-amount -D warnings
+      run: cargo clippy --all-targets --all-features -- --allow clippy::mixed-attributes-style --allow clippy::unused-io-amount --allow clippy::needless-lifetimes -D warnings
   Docs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - name: Check docs
       run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
@@ -116,7 +131,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt
@@ -125,6 +140,29 @@ jobs:
       # So instead we run `rustfmt` directly on each file.
       #cargo fmt --all -- --check
       run: find src tests examples -type f -iname "*.rs" | xargs rustfmt --check
+  Miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust ${{ env.rust_miri_nightly }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_miri_nightly }}
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests with Miri
+        run: cargo miri test --all-features --test '*' --no-fail-fast
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+      - name: Check docs with Miri
+        run: cargo miri test --doc --all-features --no-fail-fast
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+      - name: Run tests with Miri using poll selector
+        run: cargo miri test --all-features --test '*' --no-fail-fast
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+          RUSTFLAGS: --cfg mio_unsupported_force_poll_poll
   CheckTargets:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -149,12 +187,15 @@ jobs:
           - aarch64-unknown-redox
           - arm-linux-androideabi
           - arm64_32-apple-watchos
+          - armv6k-nintendo-3ds
           - armv7-sony-vita-newlibeabihf
           - i686-unknown-linux-gnu
           - i686-unknown-hurd-gnu
+          # TODO: reenable <https://github.com/tokio-rs/mio/issues/1882>.
+          #- powerpc64-ibm-aix
           - riscv32imc-esp-espidf
           - sparcv9-sun-solaris
-          - wasm32-wasi
+          - wasm32-wasip1
           - x86_64-apple-darwin
           - x86_64-apple-ios
           - x86_64-pc-nto-qnx710
@@ -176,7 +217,7 @@ jobs:
           - x86_64-unknown-openbsd
           - x86_64-unknown-redox
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@nightly
       with:
         components: rust-src
@@ -191,12 +232,95 @@ jobs:
       matrix:
         sanitizer: [address, leak, memory, thread]
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@nightly
     - name: Add rust source
       run: rustup component add rust-src
     - name: Run tests with sanitizer
       run: make test_sanitizer SAN=${{ matrix.sanitizer }}
+  TestFreeBSD:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - freebsd_version: "14.4"
+            target: x86_64-unknown-freebsd
+            arch: x86_64
+          - freebsd_version: "15.0"
+            target: x86_64-unknown-freebsd
+            arch: x86_64
+          - freebsd_version: "14.4"
+            target: i686-unknown-freebsd
+            arch: i686
+    name: FreeBSD/${{ matrix.arch }} ${{ matrix.freebsd_version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Start VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: ${{ matrix.freebsd_version }}
+          usesh: true
+      - name: Install dependencies
+        shell: freebsd {0}
+        run: |
+          pkg install -y curl
+          fetch https://sh.rustup.rs -o rustup.sh
+          sh rustup.sh -y --profile=minimal
+          if [ "${{ matrix.target }}" = "i686-unknown-freebsd" ]; then
+            . $HOME/.cargo/env
+            rustup target add i686-unknown-freebsd
+          fi
+      - name: Tests
+        shell: freebsd {0}
+        run: |
+          . $HOME/.cargo/env
+          cargo test --target ${{ matrix.target }} --all-features
+  TestSolaris:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Start VM
+        uses: vmactions/solaris-vm@v1
+        with:
+          release: "11.4-gcc"
+          usesh: true
+          copyback: false
+      - name: Install dependencies
+        shell: solaris {0}
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o rustup.sh
+          sh rustup.sh -y --profile=minimal
+      - name: Tests
+        shell: solaris {0}
+        run: |
+          . $HOME/.cargo/env
+          cargo test --all-features
+  Wine:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v7
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Install wine
+      run: |
+        # https://gitlab.winehq.org/wine/wine/-/wikis/Debian-Ubuntu
+        wget -O - https://dl.winehq.org/wine-builds/winehq.key | sudo gpg --dearmor -o /etc/apt/keyrings/winehq-archive.key -
+        sudo dpkg --add-architecture i386
+        sudo wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/jammy/winehq-jammy.sources
+        sudo apt-get update
+        sudo apt-get install -y winehq-stable wine-binfmt
+        echo -1 | sudo tee /proc/sys/fs/binfmt_misc/cli # deregister mono handler for PE files
+    - name: Install linker and libraries
+      run: |
+        sudo apt-get install -y gcc-mingw-w64-x86-64
+    - name: Install target
+      run: rustup target add x86_64-pc-windows-gnu
+    - name: Tests
+      run: cargo test --all-features --target x86_64-pc-windows-gnu
+    - name: Tests release build
+      run: cargo test --release --all-features --target x86_64-pc-windows-gnu
   # Single job required to merge the pr.
   Passed:
     runs-on: ubuntu-latest
@@ -209,6 +333,9 @@ jobs:
       - Clippy
       - Docs
       - Rustfmt
+      - Miri
       - CheckTargets
+      - TestFreeBSD
+      - TestSolaris
     steps:
       - run: exit 0

@@ -57,7 +57,7 @@ fn issue_776() {
     match stream.read(&mut buf) {
         Ok(_) => panic!("unexpected ok"),
         Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => (),
-        Err(err) => panic!("unexpected error: {}", err),
+        Err(err) => panic!("unexpected error: {err}"),
     }
 
     drop(stream);
@@ -110,6 +110,7 @@ fn issue_1205() {
 
 #[test]
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "Miri doesn't support Unix domain sockets")]
 fn issue_1403() {
     use mio::net::UnixDatagram;
     use util::temp_file;

@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "wasi"))]
 #![cfg(all(feature = "os-poll", feature = "net"))]
 
 use mio::net::TcpListener;
@@ -26,16 +25,28 @@ fn is_send_and_sync() {
     assert_sync::<TcpListener>();
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn tcp_listener() {
     smoke_test_tcp_listener(any_local_address(), TcpListener::bind);
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn tcp_listener_ipv6() {
     smoke_test_tcp_listener(any_local_ipv6_address(), TcpListener::bind);
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn tcp_listener_std() {
     smoke_test_tcp_listener(any_local_address(), |addr| {
@@ -147,6 +158,10 @@ fn registering() {
     // NOTE: more tests are done in the smoke tests above.
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn reregister() {
     let (mut poll, mut events) = init_with_poll();
@@ -183,6 +198,10 @@ fn reregister() {
     thread_handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn no_events_after_deregister() {
     let (mut poll, mut events) = init_with_poll();
@@ -216,6 +235,10 @@ fn no_events_after_deregister() {
 }
 
 /// This tests reregister on successful accept works
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn tcp_listener_two_streams() {
     let (mut poll1, mut events) = init_with_poll();

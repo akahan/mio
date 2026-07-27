@@ -1,20 +1,24 @@
 // Not all functions are used by all tests.
 #![allow(dead_code, unused_macros)]
-#![cfg(not(target_os = "wasi"))]
 #![cfg(all(feature = "os-poll", feature = "net"))]
 
+#[cfg(not(target_os = "wasi"))]
 use std::mem::size_of;
 use std::net::SocketAddr;
 use std::ops::BitOr;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "wasi"))]
 use std::os::fd::AsRawFd;
+#[cfg(not(target_os = "wasi"))]
 use std::path::PathBuf;
 use std::sync::Once;
 use std::time::Duration;
-use std::{env, fmt, fs, io};
+#[cfg(not(target_os = "wasi"))]
+use std::{env, fs};
+use std::{fmt, io};
 
 use log::{error, warn};
 use mio::event::Event;
+#[cfg(not(target_os = "wasi"))]
 use mio::net::TcpStream;
 use mio::{Events, Interest, Poll, Token};
 
@@ -24,10 +28,16 @@ pub fn init() {
     INIT.call_once(|| {
         env_logger::try_init().expect("unable to initialise logger");
 
-        // Remove all temporary files from previous test runs.
-        let dir = temp_dir();
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("unable to create temporary directory");
+        // Each test is run in a sandbox on WASI (and `temp_dir`
+        // doesn't work as of this writing, anyway), so no need to
+        // clean up here.
+        #[cfg(not(target_os = "wasi"))]
+        {
+            // Remove all temporary files from previous test runs.
+            let dir = temp_dir();
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("unable to create temporary directory");
+        }
     })
 }
 
@@ -134,6 +144,7 @@ impl From<Interest> for Readiness {
     }
 }
 
+#[track_caller]
 pub fn expect_events(poll: &mut Poll, events: &mut Events, mut expected: Vec<ExpectEvent>) {
     // In a lot of calls we expect more then one event, but it could be that
     // poll returns the first event only in a single call. To be a bit more
@@ -149,7 +160,7 @@ pub fn expect_events(poll: &mut Poll, events: &mut Events, mut expected: Vec<Exp
                 expected.swap_remove(index);
             } else {
                 // Must accept sporadic events.
-                warn!("got unexpected event: {:?}", event);
+                warn!("got unexpected event: {event:?}");
             }
         }
 
@@ -160,17 +171,17 @@ pub fn expect_events(poll: &mut Poll, events: &mut Events, mut expected: Vec<Exp
 
     assert!(
         expected.is_empty(),
-        "the following expected events were not found: {:?}",
-        expected
+        "the following expected events were not found: {expected:?}"
     );
 }
 
+#[track_caller]
 pub fn expect_no_events(poll: &mut Poll, events: &mut Events) {
     poll.poll(events, Some(Duration::from_millis(50)))
         .expect("unable to poll");
     if !events.is_empty() {
         for event in events.iter() {
-            error!("unexpected event: {:?}", event);
+            error!("unexpected event: {event:?}");
         }
         panic!("received events, but didn't expect any, see above");
     }
@@ -183,9 +194,7 @@ pub fn assert_error<T, E: fmt::Display>(result: Result<T, E>, expected_msg: &str
         Ok(_) => panic!("unexpected OK result"),
         Err(err) => assert!(
             err.to_string().contains(expected_msg),
-            "wanted: {}, got: {}",
-            expected_msg,
-            err,
+            "wanted: {expected_msg}, got: {err}",
         ),
     }
 }
@@ -195,12 +204,12 @@ pub fn assert_would_block<T>(result: io::Result<T>) {
     match result {
         Ok(_) => panic!("unexpected OK result, expected a `WouldBlock` error"),
         Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {}
-        Err(err) => panic!("unexpected error result: {}", err),
+        Err(err) => panic!("unexpected error result: {err}"),
     }
 }
 
 /// Assert that `NONBLOCK` is set on `socket`.
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "wasi"))]
 pub fn assert_socket_non_blocking<S>(socket: &S)
 where
     S: AsRawFd,
@@ -215,13 +224,22 @@ pub fn assert_socket_non_blocking<S>(_: &S) {
 }
 
 /// Assert that `CLOEXEC` is set on `socket`.
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "wasi"))]
 pub fn assert_socket_close_on_exec<S>(socket: &S)
 where
     S: AsRawFd,
 {
-    let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFD) };
-    assert!(flags & libc::FD_CLOEXEC != 0, "socket flag CLOEXEC not set");
+    #[cfg(target_os = "wasi")]
+    {
+        // WASI does not current support `exec` or `FD_CLOEXEC`
+        _ = socket;
+    }
+
+    #[cfg(not(target_os = "wasi"))]
+    {
+        let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFD) };
+        assert!(flags & libc::FD_CLOEXEC != 0, "socket flag CLOEXEC not set");
+    }
 }
 
 #[cfg(windows)]
@@ -301,6 +319,7 @@ pub fn set_linger_zero(socket: &TcpStream) {
 }
 
 /// Returns a path to a temporary file using `name` as filename.
+#[cfg(not(target_os = "wasi"))]
 pub fn temp_file(name: &'static str) -> PathBuf {
     let mut path = temp_dir();
     path.push(name);
@@ -308,6 +327,7 @@ pub fn temp_file(name: &'static str) -> PathBuf {
 }
 
 /// Returns the temporary directory for Mio test files.
+#[cfg(not(target_os = "wasi"))]
 fn temp_dir() -> PathBuf {
     let mut path = env::temp_dir();
     path.push("mio_tests");

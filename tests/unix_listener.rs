@@ -1,4 +1,4 @@
-#![cfg(all(unix, feature = "os-poll", feature = "net"))]
+#![cfg(all(unix, feature = "os-poll", feature = "net", not(miri)))] // Miri doesn't support Unix domain sockets.
 
 use mio::net::UnixListener;
 use mio::{Interest, Token};
@@ -110,6 +110,9 @@ fn unix_listener_reregister() {
         &mut events,
         vec![ExpectEvent::new(TOKEN_1, Interest::READABLE)],
     );
+    // Complete handshake to unblock the client thread.
+    #[cfg(target_os = "cygwin")]
+    listener.accept().unwrap();
 
     barrier.wait();
     handle.join().unwrap();
@@ -130,6 +133,9 @@ fn unix_listener_deregister() {
 
     poll.registry().deregister(&mut listener).unwrap();
     expect_no_events(&mut poll, &mut events);
+    // Complete handshake to unblock the client thread.
+    #[cfg(target_os = "cygwin")]
+    listener.accept().unwrap();
 
     barrier.wait();
     handle.join().unwrap();
@@ -138,15 +144,14 @@ fn unix_listener_deregister() {
 #[test]
 #[cfg(any(target_os = "android", target_os = "linux"))]
 fn unix_listener_abstract_namespace() {
-    use rand::Rng;
     use std::os::linux::net::SocketAddrExt;
     use std::os::unix::net::SocketAddr;
 
     let (mut poll, mut events) = init_with_poll();
     let barrier = Arc::new(Barrier::new(2));
 
-    let num: u64 = rand::thread_rng().gen();
-    let name = format!("mio-abstract-uds-{}", num);
+    let num: u64 = rand::random();
+    let name = format!("mio-abstract-uds-{num}");
     let address = SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
     let mut listener = UnixListener::bind_addr(&address).unwrap();
     assert_eq!(

@@ -1,5 +1,4 @@
-#![cfg(not(target_os = "wasi"))]
-#![cfg(all(feature = "os-poll", feature = "net"))]
+#![cfg(all(feature = "os-poll", feature = "net", not(miri)))] // Miri doesn't support UDP sockets.
 
 use log::{debug, info};
 use mio::net::UdpSocket;
@@ -145,6 +144,7 @@ fn smoke_test_unconnected_udp_socket(mut socket1: UdpSocket, mut socket2: UdpSoc
     );
 
     let mut buf = [0; 20];
+    #[cfg(not(target_os = "wasi"))] // WASI does not yet support peeking
     assert_would_block(socket1.peek_from(&mut buf));
     assert_would_block(socket1.recv_from(&mut buf));
 
@@ -160,8 +160,11 @@ fn smoke_test_unconnected_udp_socket(mut socket1: UdpSocket, mut socket2: UdpSoc
         ],
     );
 
-    expect_read!(socket1.peek_from(&mut buf), DATA2, address2);
-    expect_read!(socket2.peek_from(&mut buf), DATA1, address1);
+    #[cfg(not(target_os = "wasi"))] // WASI does not yet support peeking
+    {
+        expect_read!(socket1.peek_from(&mut buf), DATA2, address2);
+        expect_read!(socket2.peek_from(&mut buf), DATA1, address1);
+    }
 
     expect_read!(socket1.recv_from(&mut buf), DATA2, address2);
     expect_read!(socket2.recv_from(&mut buf), DATA1, address1);
@@ -189,6 +192,7 @@ fn get_ttl_without_previous_set() {
     socket1.ttl().expect("unable to get TTL for UDP socket");
 }
 
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support broadcast")]
 #[test]
 fn set_get_broadcast() {
     let socket1 = UdpSocket::bind(any_local_address()).unwrap();
@@ -202,6 +206,7 @@ fn set_get_broadcast() {
     assert!(socket1.take_error().unwrap().is_none());
 }
 
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support broadcast")]
 #[test]
 fn get_broadcast_without_previous_set() {
     let socket1 = UdpSocket::bind(any_local_address()).unwrap();
@@ -211,6 +216,7 @@ fn get_broadcast_without_previous_set() {
         .expect("unable to get broadcast for UDP socket");
 }
 
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support multicast")]
 #[test]
 fn set_get_multicast_loop_v4() {
     let socket1 = UdpSocket::bind(any_local_address()).unwrap();
@@ -224,6 +230,7 @@ fn set_get_multicast_loop_v4() {
     assert!(socket1.take_error().unwrap().is_none());
 }
 
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support multicast")]
 #[test]
 fn get_multicast_loop_v4_without_previous_set() {
     let socket1 = UdpSocket::bind(any_local_address()).unwrap();
@@ -233,6 +240,7 @@ fn get_multicast_loop_v4_without_previous_set() {
         .expect("unable to get multicast_loop_v4 for UDP socket");
 }
 
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support multicast")]
 #[test]
 fn set_get_multicast_ttl_v4() {
     let socket1 = UdpSocket::bind(any_local_address()).unwrap();
@@ -244,6 +252,7 @@ fn set_get_multicast_ttl_v4() {
     assert!(socket1.take_error().unwrap().is_none());
 }
 
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support multicast")]
 #[test]
 fn get_multicast_ttl_v4_without_previous_set() {
     let socket1 = UdpSocket::bind(any_local_address()).unwrap();
@@ -254,6 +263,7 @@ fn get_multicast_ttl_v4_without_previous_set() {
 }
 
 #[test]
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support multicast")]
 #[cfg_attr(
     target_os = "hurd",
     ignore = "Multicast loop v6 isn't supported on GNU/Hurd"
@@ -271,6 +281,7 @@ fn set_get_multicast_loop_v6() {
 }
 
 #[test]
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support multicast")]
 #[cfg_attr(
     target_os = "hurd",
     ignore = "Multicast loop v6 isn't supported on GNU/Hurd"
@@ -366,6 +377,7 @@ fn smoke_test_connected_udp_socket(mut socket1: UdpSocket, mut socket2: UdpSocke
     );
 
     let mut buf = [0; 20];
+    #[cfg(not(target_os = "wasi"))] // WASI does not yet support peeking
     assert_would_block(socket1.peek(&mut buf));
     assert_would_block(socket1.recv(&mut buf));
 
@@ -382,8 +394,11 @@ fn smoke_test_connected_udp_socket(mut socket1: UdpSocket, mut socket2: UdpSocke
     );
 
     let mut buf = [0; 20];
-    expect_read!(socket1.peek(&mut buf), DATA2);
-    expect_read!(socket2.peek(&mut buf), DATA1);
+    #[cfg(not(target_os = "wasi"))] // WASI does not yet support peeking
+    {
+        expect_read!(socket1.peek(&mut buf), DATA2);
+        expect_read!(socket2.peek(&mut buf), DATA1);
+    }
 
     expect_read!(socket1.recv(&mut buf), DATA2);
     expect_read!(socket2.recv(&mut buf), DATA1);
@@ -561,13 +576,19 @@ fn unconnected_udp_socket_connected_methods() {
     );
 
     // Socket is unconnected, but we're using an connected method.
-    if cfg!(not(any(target_os = "hurd", target_os = "windows"))) {
+    if cfg!(not(any(
+        target_os = "hurd",
+        target_os = "windows",
+        target_os = "cygwin"
+    ))) {
         assert_error(socket1.send(DATA1), "address required");
     }
     if cfg!(target_os = "windows") {
         assert_error(
             socket1.send(DATA1),
-            "no address was supplied. (os error 10057)",
+            // "no address was supplied. (os error 10057)"
+            // but Wine has a different error message.
+            "(os error 10057)",
         );
     }
 
@@ -583,6 +604,7 @@ fn unconnected_udp_socket_connected_methods() {
     // Receive methods don't require the socket to be connected, you just won't
     // know the sender.
     let mut buf = [0; 20];
+    #[cfg(not(target_os = "wasi"))] // WASI does not yet support peeking
     expect_read!(socket2.peek(&mut buf), DATA1);
     expect_read!(socket2.recv(&mut buf), DATA1);
 
@@ -630,17 +652,25 @@ fn connected_udp_socket_unconnected_methods() {
         target_os = "android",
         target_os = "hurd",
         target_os = "linux",
-        target_os = "windows"
+        target_os = "windows",
+        target_os = "cygwin",
+        target_os = "wasi",
     )))]
     assert_error(socket1.send_to(DATA1, address2), "already connected");
+    #[cfg(target_os = "wasi")]
+    assert_error(socket1.send_to(DATA1, address2), "Socket is connected");
     // Even if the address is the same.
     #[cfg(not(any(
         target_os = "android",
         target_os = "hurd",
         target_os = "linux",
-        target_os = "windows"
+        target_os = "windows",
+        target_os = "cygwin",
+        target_os = "wasi",
     )))]
     assert_error(socket1.send_to(DATA1, address3), "already connected");
+    #[cfg(target_os = "wasi")]
+    assert_error(socket1.send_to(DATA1, address3), "Socket is connected");
 
     checked_write!(socket2.send_to(DATA2, address3));
 
@@ -651,6 +681,7 @@ fn connected_udp_socket_unconnected_methods() {
     );
 
     let mut buf = [0; 20];
+    #[cfg(not(target_os = "wasi"))] // WASI does not yet support peeking
     expect_read!(socket3.peek_from(&mut buf), DATA2, address2);
     expect_read!(socket3.recv_from(&mut buf), DATA2, address2);
 
@@ -690,6 +721,10 @@ fn udp_socket_register() {
     // NOTE: more tests are done in the smoke tests above.
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn udp_socket_reregister() {
     let (mut poll, mut events) = init_with_poll();
@@ -726,6 +761,10 @@ fn udp_socket_reregister() {
     thread_handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn udp_socket_no_events_after_deregister() {
     let (mut poll, mut events) = init_with_poll();
@@ -897,7 +936,7 @@ pub fn udp_socket_discard() {
 
     let mut tx = UdpSocket::bind(any_local_address()).unwrap();
     let mut rx = UdpSocket::bind(any_local_address()).unwrap();
-    let udp_outside = UdpSocket::bind(any_local_address()).unwrap();
+    let mut udp_outside = UdpSocket::bind(any_local_address()).unwrap();
 
     let tx_addr = tx.local_addr().unwrap();
     let rx_addr = rx.local_addr().unwrap();
@@ -908,6 +947,20 @@ pub fn udp_socket_discard() {
 
     let mut poll = Poll::new().unwrap();
 
+    let mut events = Events::with_capacity(1024);
+
+    poll.registry()
+        .register(&mut udp_outside, ID1, Interest::WRITABLE)
+        .unwrap();
+
+    // Fresh sockets are not guaranteed by POSIX to be immediately writable (and
+    // aren't always on WASI), so we need to wait briefly for writability here:
+    expect_events(
+        &mut poll,
+        &mut events,
+        vec![ExpectEvent::new(ID1, Interest::WRITABLE)],
+    );
+
     checked_write!(udp_outside.send(b"hello world"));
 
     poll.registry()
@@ -916,8 +969,6 @@ pub fn udp_socket_discard() {
     poll.registry()
         .register(&mut tx, SENDER, Interest::WRITABLE)
         .unwrap();
-
-    let mut events = Events::with_capacity(1024);
 
     poll.poll(&mut events, Some(Duration::from_secs(5)))
         .unwrap();
@@ -964,7 +1015,7 @@ impl UdpHandler {
                     unsafe { self.rx_buf.set_len(cnt) };
                     assert_eq!(addr.ip(), self.localhost);
                 }
-                res => panic!("unexpected result: {:?}", res),
+                res => panic!("unexpected result: {res:?}"),
             }
             assert_eq!(str::from_utf8(&self.rx_buf).unwrap(), self.msg);
             self.shutdown = true;
@@ -982,6 +1033,7 @@ impl UdpHandler {
 
 // TODO: This doesn't pass on android 64bit CI...
 // Figure out why!
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support multicast")]
 #[cfg_attr(
     target_os = "android",
     ignore = "Multicast doesn't work on Android 64bit"

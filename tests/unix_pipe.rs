@@ -54,7 +54,7 @@ fn smoke() {
 
 #[test]
 #[cfg_attr(
-    any(target_os = "hurd", target_os = "nto"),
+    any(target_os = "hurd", target_os = "nto", target_os = "cygwin"),
     ignore = "Writer fd close events do not trigger POLLHUP on nto and GNU/Hurd targets"
 )]
 fn event_when_sender_is_dropped() {
@@ -96,7 +96,7 @@ fn event_when_sender_is_dropped() {
 
 #[test]
 #[cfg_attr(
-    any(target_os = "hurd", target_os = "nto"),
+    any(target_os = "hurd", target_os = "nto", target_os = "cygwin"),
     ignore = "Writer fd close events do not trigger POLLHUP on nto and GNU/Hurd targets"
 )]
 fn event_when_receiver_is_dropped() {
@@ -133,9 +133,10 @@ fn event_when_receiver_is_dropped() {
 
 #[test]
 #[cfg_attr(
-    any(target_os = "hurd", target_os = "nto"),
+    any(target_os = "hurd", target_os = "nto", target_os = "cygwin"),
     ignore = "Writer fd close events do not trigger POLLHUP on nto and GNU/Hurd targets"
 )]
+#[cfg_attr(miri, ignore = "Miri doesn't support process spawning")]
 fn from_child_process_io() {
     // `cat` simply echo everything that we write via standard in.
     let mut child = Command::new("cat")
@@ -183,6 +184,7 @@ fn from_child_process_io() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Miri doesn't support process spawning")]
 fn nonblocking_child_process_io() {
     // `cat` simply echo everything that we write via standard in.
     let mut child = Command::new("cat")
@@ -209,18 +211,16 @@ pub fn expect_one_closed_event(poll: &mut Poll, events: &mut Events, token: Toke
     poll.poll(events, Some(Duration::from_secs(1))).unwrap();
     let mut iter = events.iter();
     let event = iter.next().unwrap();
-    assert_eq!(event.token(), token, "invalid token, event: {:#?}", event);
+    assert_eq!(event.token(), token, "invalid token, event: {event:#?}");
     if read {
         assert!(
             event.is_read_closed(),
-            "expected closed or error, event: {:#?}",
-            event
+            "expected closed or error, event: {event:#?}",
         );
     } else {
         assert!(
             event.is_write_closed(),
-            "expected closed or error, event: {:#?}",
-            event
+            "expected closed or error, event: {event:#?}",
         );
     }
     assert!(iter.next().is_none());

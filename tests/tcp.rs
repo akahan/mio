@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "wasi"))]
 #![cfg(all(feature = "os-poll", feature = "net"))]
 
 use mio::net::{TcpListener, TcpStream};
@@ -13,8 +12,11 @@ use std::time::Duration;
 mod util;
 use util::{
     any_local_address, assert_send, assert_sync, expect_events, expect_no_events, init,
-    init_with_poll, set_linger_zero, ExpectEvent,
+    init_with_poll, ExpectEvent,
 };
+
+#[cfg(not(target_os = "wasi"))]
+use util::set_linger_zero;
 
 const LISTEN: Token = Token(0);
 const CLIENT: Token = Token(1);
@@ -42,6 +44,10 @@ fn is_send_and_sync() {
     assert_sync::<TcpStream>();
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn accept() {
     init();
@@ -88,6 +94,10 @@ fn accept() {
     handle.join().unwrap();
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn connect() {
     init();
@@ -162,6 +172,10 @@ fn connect() {
     handle.join().unwrap();
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn read() {
     init();
@@ -205,12 +219,8 @@ fn read() {
         for event in &events {
             assert_eq!(event.token(), Token(1));
             let mut buf = [0; 1024];
-            loop {
-                if let Ok(amt) = data.socket.read(&mut buf) {
-                    data.amt += amt;
-                } else {
-                    break;
-                }
+            while let Ok(amt) = data.socket.read(&mut buf) {
+                data.amt += amt;
                 if data.amt >= N {
                     data.shutdown = true;
                     break;
@@ -221,6 +231,10 @@ fn read() {
     handle.join().unwrap();
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading or peeking"
+)]
 #[test]
 fn peek() {
     init();
@@ -267,15 +281,11 @@ fn peek() {
             match data.socket.peek(&mut buf) {
                 Ok(_) => (),
                 Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => continue,
-                Err(err) => panic!("unexpected error: {}", err),
+                Err(err) => panic!("unexpected error: {err}"),
             }
 
-            loop {
-                if let Ok(amt) = data.socket.read(&mut buf) {
-                    data.amt += amt;
-                } else {
-                    break;
-                }
+            while let Ok(amt) = data.socket.read(&mut buf) {
+                data.amt += amt;
                 if data.amt >= N {
                     data.shutdown = true;
                     break;
@@ -286,6 +296,10 @@ fn peek() {
     handle.join().unwrap();
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn write() {
     init();
@@ -329,12 +343,8 @@ fn write() {
         for event in &events {
             assert_eq!(event.token(), Token(1));
             let buf = [0; 1024];
-            loop {
-                if let Ok(amt) = data.socket.write(&buf) {
-                    data.amt += amt;
-                } else {
-                    break;
-                }
+            while let Ok(amt) = data.socket.write(&buf) {
+                data.amt += amt;
                 if data.amt >= N {
                     data.shutdown = true;
                     break;
@@ -421,6 +431,10 @@ fn bind_twice_bad() {
     assert!(TcpListener::bind(addr).is_err());
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn multiple_writes_immediate_success() {
     init();
@@ -469,6 +483,7 @@ fn multiple_writes_immediate_success() {
     handle.join().unwrap();
 }
 
+#[cfg_attr(miri, ignore = "Miri doesn't support lingering")]
 #[test]
 fn connection_reset_by_peer() {
     init();
@@ -483,6 +498,7 @@ fn connection_reset_by_peer() {
 
     // Connect client
     let mut client = TcpStream::connect(addr).unwrap();
+    #[cfg(not(target_os = "wasi"))]
     set_linger_zero(&client);
 
     // Register server
@@ -512,7 +528,7 @@ fn connection_reset_by_peer() {
                         break 'outer;
                     }
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(e) => panic!("unexpected error {:?}", e),
+                    Err(e) => panic!("unexpected error {e:?}"),
                 }
             }
         }
@@ -539,7 +555,7 @@ fn connection_reset_by_peer() {
                 match server.read(&mut buf) {
                     Ok(0) | Err(_) => {}
 
-                    Ok(x) => panic!("expected empty buffer but read {} bytes", x),
+                    Ok(x) => panic!("expected empty buffer but read {x} bytes"),
                 }
                 return;
             }
@@ -559,7 +575,7 @@ fn connect_error() {
             // unfortunately doesn't get us the code coverage we want.
             return;
         }
-        Err(e) => panic!("TcpStream::connect unexpected error {:?}", e),
+        Err(e) => panic!("TcpStream::connect unexpected error {e:?}"),
     };
 
     poll.registry()
@@ -575,7 +591,7 @@ fn connect_error() {
                 // Without fastopen we would be getting the connection error
                 assert!(event.is_writable() || event.is_error());
                 // Solaris poll(2) says POLLHUP and POLLOUT are mutually exclusive.
-                #[cfg(not(target_os = "solaris"))]
+                #[cfg(not(any(target_os = "solaris", target_os = "cygwin", target_os = "wasi")))]
                 assert!(event.is_write_closed());
                 break 'outer;
             }
@@ -585,6 +601,10 @@ fn connect_error() {
     assert!(stream.take_error().unwrap().is_some());
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn write_error() {
     init();
@@ -628,7 +648,7 @@ fn write_error() {
             Ok(_) => {}
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => wait_writable(),
             Err(e) => {
-                println!("good error: {}", e);
+                println!("good error: {e}");
                 break;
             }
         }
@@ -707,7 +727,9 @@ fn write_shutdown() {
     if cfg!(any(
         target_os = "hurd",
         target_os = "solaris",
-        target_os = "nto"
+        target_os = "nto",
+        target_os = "cygwin",
+        target_os = "wasi",
     )) {
         wait!(poll, is_readable, false);
     } else {

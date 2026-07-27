@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "wasi"))]
 #![cfg(all(feature = "os-poll", feature = "net"))]
 
 use std::io::{self, IoSlice, IoSliceMut, Read, Write};
@@ -14,13 +13,18 @@ use mio::{Interest, Token};
 
 #[macro_use]
 mod util;
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "wasi")))]
 use util::init;
 use util::{
     any_local_address, any_local_ipv6_address, assert_send, assert_socket_close_on_exec,
     assert_socket_non_blocking, assert_sync, assert_would_block, expect_events, expect_no_events,
-    init_with_poll, set_linger_zero, ExpectEvent, Readiness,
+    init_with_poll, ExpectEvent, Readiness,
 };
+
+// WASI does not yet support `SO_LINGER` (see
+// https://github.com/WebAssembly/WASI/issues/709).
+#[cfg(not(target_os = "wasi"))]
+use util::set_linger_zero;
 
 const DATA1: &[u8] = b"Hello world!";
 const DATA2: &[u8] = b"Hello mars!";
@@ -37,16 +41,28 @@ fn is_send_and_sync() {
     assert_sync::<TcpStream>();
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn tcp_stream_ipv4() {
     smoke_test_tcp_stream(any_local_address(), TcpStream::connect);
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn tcp_stream_ipv6() {
     smoke_test_tcp_stream(any_local_ipv6_address(), TcpStream::connect);
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn tcp_stream_std() {
     smoke_test_tcp_stream(any_local_address(), |addr| {
@@ -81,6 +97,7 @@ where
     );
 
     let mut buf = [0; 16];
+    #[cfg(not(target_os = "wasi"))] // WASI does not yet support peeking
     assert_would_block(stream.peek(&mut buf));
     assert_would_block(stream.read(&mut buf));
 
@@ -99,6 +116,7 @@ where
         vec![ExpectEvent::new(ID1, Interest::READABLE)],
     );
 
+    #[cfg(not(target_os = "wasi"))] // WASI does not yet support peeking
     expect_read!(stream.peek(&mut buf), DATA1);
     expect_read!(stream.read(&mut buf), DATA1);
 
@@ -134,6 +152,10 @@ where
     handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn set_get_ttl() {
     let (mut poll, mut events) = init_with_poll();
@@ -166,6 +188,10 @@ fn set_get_ttl() {
     thread_handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn get_ttl_without_previous_set() {
     let (mut poll, mut events) = init_with_poll();
@@ -196,6 +222,10 @@ fn get_ttl_without_previous_set() {
     thread_handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn set_get_nodelay() {
     let (mut poll, mut events) = init_with_poll();
@@ -228,6 +258,10 @@ fn set_get_nodelay() {
     thread_handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn get_nodelay_without_previous_set() {
     let (mut poll, mut events) = init_with_poll();
@@ -260,6 +294,10 @@ fn get_nodelay_without_previous_set() {
     thread_handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn shutdown_read() {
     let (mut poll, mut events) = init_with_poll();
@@ -351,6 +389,10 @@ fn shutdown_write() {
     thread_handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn shutdown_both() {
     let (mut poll, mut events) = init_with_poll();
@@ -398,10 +440,24 @@ fn shutdown_both() {
     }
 
     let err = stream.write(DATA2).unwrap_err();
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    // 10053 WSAECONNABORTED (seen on Windows, maps to `io::ErrorKind::ConnectionAborted`).
+    // 10058 WSAESHUTDOWN (seen in Wine, maps to `io::ErrorKind::BrokenPipe`
+    // from Rust 1.97 onwards (https://github.com/rust-lang/rust/pull/156063)
+    // and to `io::Error::Uncategorized` before).
+    //
+    // Both errors seem reasonable: we have closed the writing side, it's
+    // reasonable to receive an error for writing to the writing side, but the
+    // other party has also closed the socket, so it's reasonable to get an
+    // error because the other side went away.
     #[cfg(windows)]
-    assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
+    {
+        use windows_sys::Win32::Networking::WinSock::{WSAECONNABORTED, WSAESHUTDOWN};
+        assert!(
+            err.raw_os_error() == Some(WSAECONNABORTED) || err.raw_os_error() == Some(WSAESHUTDOWN)
+        );
+    }
 
     drop(stream);
     thread_handle.join().expect("unable to join thread");
@@ -428,6 +484,10 @@ fn raw_fd() {
     thread_handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn registering() {
     let (mut poll, mut events) = init_with_poll();
@@ -448,6 +508,10 @@ fn registering() {
     thread_handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn reregistering() {
     let (mut poll, mut events) = init_with_poll();
@@ -476,6 +540,10 @@ fn reregistering() {
     thread_handle.join().expect("unable to join thread");
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[test]
 fn no_events_after_deregister() {
     let (mut poll, mut events) = init_with_poll();
@@ -499,7 +567,10 @@ fn no_events_after_deregister() {
 
     // Also, write should work
     let mut buf = [0; 16];
-    assert_would_block(stream.peek(&mut buf));
+    #[cfg(not(target_os = "wasi"))] // WASI does not yet support peeking
+    {
+        assert_would_block(stream.peek(&mut buf));
+    }
     assert_would_block(stream.read(&mut buf));
 
     checked_write!(stream.write(DATA1));
@@ -512,6 +583,10 @@ fn no_events_after_deregister() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
 #[cfg_attr(
     windows,
     ignore = "fails on Windows; client read closed events are not triggered"
@@ -550,7 +625,14 @@ fn tcp_shutdown_client_read_close_event() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "fails; client write_closed events are not found")]
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
+#[cfg_attr(
+    any(windows, target_os = "cygwin"),
+    ignore = "fails; client write_closed events are not found"
+)]
 #[cfg_attr(
     any(
         target_os = "android",
@@ -593,9 +675,11 @@ fn tcp_shutdown_client_write_close_event() {
 }
 
 #[test]
+#[cfg_attr(target_os = "wasi", ignore = "POLLRDHUP isn't supported on WASI")]
 #[cfg_attr(target_os = "hurd", ignore = "POLLRDHUP isn't supported on GNU/Hurd")]
 #[cfg_attr(target_os = "solaris", ignore = "POLLRDHUP isn't supported on Solaris")]
 #[cfg_attr(target_os = "nto", ignore = "POLLRDHUP isn't supported on NTO")]
+#[cfg_attr(target_os = "cygwin", ignore = "POLLRDHUP isn't supported on Cygwin")]
 fn tcp_shutdown_server_write_close_event() {
     let (mut poll, mut events) = init_with_poll();
     let barrier = Arc::new(Barrier::new(2));
@@ -626,9 +710,11 @@ fn tcp_shutdown_server_write_close_event() {
 }
 
 #[test]
+#[cfg_attr(target_os = "wasi", ignore = "POLLRDHUP isn't supported on WASI")]
 #[cfg_attr(target_os = "hurd", ignore = "POLLRDHUP isn't supported on GNU/Hurd")]
 #[cfg_attr(target_os = "solaris", ignore = "POLLRDHUP isn't supported on Solaris")]
 #[cfg_attr(target_os = "nto", ignore = "POLLRDHUP isn't supported on NTO")]
+#[cfg_attr(target_os = "cygwin", ignore = "POLLRDHUP isn't supported on Cygwin")]
 fn tcp_reset_close_event() {
     let (mut poll, mut events) = init_with_poll();
 
@@ -673,7 +759,11 @@ fn tcp_reset_close_event() {
 
 #[test]
 #[cfg_attr(
-    windows,
+    target_os = "wasi",
+    ignore = "WASI does not yet support multithreading"
+)]
+#[cfg_attr(
+    any(windows, target_os = "cygwin"),
     ignore = "fails on Windows; client close events are not found"
 )]
 #[cfg_attr(
@@ -729,7 +819,14 @@ fn echo_listener(addr: SocketAddr, n_connections: usize) -> (thread::JoinHandle<
                     // error when the reading side of the peer connection is
                     // shutdown, we don't consider it an actual here.
                     .or_else(|err| match err {
-                        ref err if err.kind() == io::ErrorKind::ConnectionReset => Ok(0),
+                        ref err
+                            if matches!(
+                                err.kind(),
+                                io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted
+                            ) =>
+                        {
+                            Ok(0)
+                        }
                         err => Err(err),
                     })
                     .expect("error reading");
@@ -773,6 +870,11 @@ fn start_listener(
     (thread_handle, receiver.recv().unwrap())
 }
 
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "WASI does not yet support `POLLHUP` or `POLLRDHUP`"
+)]
+#[cfg_attr(miri, ignore = "Miri doesn't support lingering")]
 #[test]
 fn hup_event_on_disconnect() {
     use mio::net::TcpListener;
@@ -806,6 +908,7 @@ fn hup_event_on_disconnect() {
 
     let (sock, _) = listener.accept().unwrap();
     // Prevent the OS from performing a graceful shutdown
+    #[cfg(not(target_os = "wasi"))]
     set_linger_zero(&sock);
     drop(sock);
 
@@ -816,6 +919,7 @@ fn hup_event_on_disconnect() {
     );
 }
 
+#[cfg_attr(miri, ignore = "Miri doesn't support `Interest::PRIORITY`")]
 #[test]
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn priority_event_on_oob_data() {
@@ -863,4 +967,133 @@ fn send_oob_data<S: AsRawFd>(stream: &S, data: &[u8]) -> io::Result<usize> {
             Ok(res as usize)
         }
     }
+}
+
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support peeking")]
+#[test]
+fn peek_ok() {
+    let mut buf = [0; 2];
+    let (mut poll, mut events) = init_with_poll();
+
+    let listener = net::TcpListener::bind(any_local_address()).unwrap();
+    let sockaddr = listener.local_addr().unwrap();
+    let thread_handle = thread::spawn(move || listener.accept().unwrap());
+    let stream1 = net::TcpStream::connect(sockaddr).unwrap();
+    let (mut stream2, _) = thread_handle.join().unwrap();
+
+    stream1.set_nonblocking(true).unwrap();
+    let mut stream1 = TcpStream::from_std(stream1);
+
+    poll.registry()
+        .register(&mut stream1, ID1, Interest::READABLE)
+        .unwrap();
+
+    expect_no_events(&mut poll, &mut events);
+
+    assert_eq!(stream2.write(&[0]).unwrap(), 1);
+    // peek multiple times until we get a byte
+    peek_until_ok(&mut buf, &mut stream1, 1);
+    // a successful peek shouldn't remove readable interest
+    // so we should still get a readable event
+    expect_events(
+        &mut poll,
+        &mut events,
+        vec![ExpectEvent::new(ID1, Readiness::READABLE)],
+    );
+}
+
+fn peek_until_ok<const N: usize>(buf: &mut [u8; N], stream1: &mut TcpStream, expected: usize) {
+    loop {
+        let res = stream1.peek(buf);
+        match res {
+            Ok(x) => {
+                assert_eq!(x, expected);
+                break;
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            _ => panic!("Unexpected error: {:?}", res),
+        }
+    }
+}
+
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support peeking")]
+#[test]
+fn peek_would_block() {
+    let mut buf = [0; 1];
+    let (mut poll, mut events) = init_with_poll();
+
+    let listener = net::TcpListener::bind(any_local_address()).unwrap();
+    let sockaddr = listener.local_addr().unwrap();
+    let thread_handle = thread::spawn(move || listener.accept().unwrap());
+    let stream1 = net::TcpStream::connect(sockaddr).unwrap();
+    let (mut stream2, _) = thread_handle.join().unwrap();
+
+    stream1.set_nonblocking(true).unwrap();
+    let mut stream1 = TcpStream::from_std(stream1);
+
+    poll.registry()
+        .register(&mut stream1, ID1, Interest::READABLE)
+        .unwrap();
+
+    expect_no_events(&mut poll, &mut events);
+
+    assert_eq!(stream2.write(&[0]).unwrap(), 1);
+    expect_events(
+        &mut poll,
+        &mut events,
+        vec![ExpectEvent::new(ID1, Readiness::READABLE)],
+    );
+
+    assert_eq!(stream1.read(&mut buf).unwrap(), 1);
+    assert_would_block(stream1.peek(&mut buf));
+
+    assert_eq!(stream2.write(&[0, 1, 2, 3]).unwrap(), 4);
+
+    expect_events(
+        &mut poll,
+        &mut events,
+        vec![ExpectEvent::new(ID1, Readiness::READABLE)],
+    );
+}
+
+#[cfg_attr(target_os = "wasi", ignore = "WASI does not yet support peeking")]
+#[test]
+fn read_peek_would_block() {
+    let mut buf = [0; 1];
+    let (mut poll, mut events) = init_with_poll();
+
+    let listener = net::TcpListener::bind(any_local_address()).unwrap();
+    let sockaddr = listener.local_addr().unwrap();
+    let thread_handle = thread::spawn(move || listener.accept().unwrap());
+    let stream1 = net::TcpStream::connect(sockaddr).unwrap();
+    let (mut stream2, _) = thread_handle.join().unwrap();
+
+    stream1.set_nonblocking(true).unwrap();
+    let mut stream1 = TcpStream::from_std(stream1);
+
+    poll.registry()
+        .register(&mut stream1, ID1, Interest::READABLE)
+        .unwrap();
+
+    assert_would_block(stream1.read(&mut buf));
+
+    assert_eq!(stream2.write(&[0]).unwrap(), 1);
+
+    expect_events(
+        &mut poll,
+        &mut events,
+        vec![ExpectEvent::new(ID1, Readiness::READABLE)],
+    );
+
+    assert_eq!(stream1.read(&mut buf).unwrap(), 1);
+
+    assert_would_block(stream1.peek(&mut buf));
+
+    assert_eq!(stream2.write(&[1]).unwrap(), 1);
+
+    expect_events(
+        &mut poll,
+        &mut events,
+        vec![ExpectEvent::new(ID1, Readiness::READABLE)],
+    );
 }
